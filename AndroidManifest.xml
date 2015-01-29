@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.laurencedawson.native_example"
+    package="com.pwrobel.github"
     android:versionCode="1"
     android:versionName="1.0" >
 
@@ -14,14 +14,14 @@
     <application
         android:allowBackup="false"
         android:hasCode="false"
-        android:label="NativeExample"
+        android:label="myRenderer1"
         android:theme="@android:style/Theme.Holo.NoActionBar.Fullscreen" >
         <activity
             android:name="android.app.NativeActivity"
             android:configChanges="orientation|keyboardHidden" >
             <meta-data
                 android:name="android.app.lib_name"
-                android:value="NativeExample" />
+                android:value="MainRend" />
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

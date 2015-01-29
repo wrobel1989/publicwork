@@ -107,7 +107,7 @@ void draw_frame(struct engine* engine) {
 		return;
 	}
 
-	glClearColor(255,0,0, 1);
+	glClearColor(255,0,255, 1);
 	glClear(GL_COLOR_BUFFER_BIT);
 	eglSwapBuffers(engine->display, engine->surface);
 }
