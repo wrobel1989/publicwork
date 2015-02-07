@@ -1,5 +1,6 @@
+#use NDK_DEBUG=1 env. var to build with debug lib
 LOCAL_PATH := $(call my-dir)
-
+NDK_DEBUG=1
 include $(CLEAR_VARS)
 
 TARGET_PLATFORM := 17

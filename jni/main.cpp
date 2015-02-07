@@ -9,8 +9,8 @@
 #include <android/log.h>
 #include <android_native_app_glue.h>
 
-#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "native-activity", __VA_ARGS__))
-#define LOGW(...) ((void)__android_log_print(ANDROID_LOG_WARN, "native-activity", __VA_ARGS__))
+#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "XXX native-activity", __VA_ARGS__))
+#define LOGW(...) ((void)__android_log_print(ANDROID_LOG_WARN, "XXX native-activity", __VA_ARGS__))
 
 struct engine {
 	struct android_app* app;
@@ -29,7 +29,7 @@ struct engine {
  * Initialize an EGL context for the current display.
  */
 int init_display(struct engine* engine) {
-
+__android_log_print(ANDROID_LOG_VERBOSE, "RND1", " QQQ init_display \n");
 	// Setup OpenGL ES 2
 	// http://stackoverflow.com/questions/11478957/how-do-i-create-an-opengl-es-2-context-in-a-native-activity
 
@@ -102,6 +102,7 @@ int init_display(struct engine* engine) {
  * Just the current frame in the display.
  */
 void draw_frame(struct engine* engine) {
+__android_log_print(ANDROID_LOG_VERBOSE, "RND1", " QQQ draw_frame \n");
 	// No display.
 	if (engine->display == NULL) {
 		return;
@@ -135,6 +136,7 @@ void terminate_display(struct engine* engine) {
  * Process the next input event.
  */
 int32_t handle_input(struct android_app* app, AInputEvent* event) {
+__android_log_print(ANDROID_LOG_VERBOSE, "RND1", " QQQ handle_input \n");
 	struct engine* engine = (struct engine*)app->userData;
 	if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
 		engine->touchX = AMotionEvent_getX(event, 0);
@@ -149,6 +151,7 @@ int32_t handle_input(struct android_app* app, AInputEvent* event) {
  * Process the next main command.
  */
 void handle_cmd(struct android_app* app, int32_t cmd) {
+__android_log_print(ANDROID_LOG_VERBOSE, "RND1", " QQQ handle_cmd \n");
 	struct engine* engine = (struct engine*)app->userData;
 	switch (cmd) {
 	case APP_CMD_SAVE_STATE:
