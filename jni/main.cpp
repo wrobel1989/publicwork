@@ -1,213 +1,232 @@
-#include <jni.h>
-#include <errno.h>
-#include <math.h>
-
-#include <EGL/egl.h>
-#include <GLES/gl.h>
-
-#include <android/sensor.h>
-#include <android/log.h>
 #include <android_native_app_glue.h>
 
-#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "XXX native-activity", __VA_ARGS__))
-#define LOGW(...) ((void)__android_log_print(ANDROID_LOG_WARN, "XXX native-activity", __VA_ARGS__))
+#include <errno.h>
+#include <jni.h>
+#include <sys/time.h>
+#include <time.h>
+#include <android/log.h>
 
-struct engine {
-	struct android_app* app;
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <queue>
 
-	EGLDisplay display;
-	EGLSurface surface;
-	EGLContext context;
-	int32_t width;
-	int32_t height;
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 
-	int32_t touchX;
-	int32_t touchY;
+#define  LOG_TAG    "OCV:libnative_activity"
+#define  LOGD(...)  __android_log_print(ANDROID_LOG_DEBUG,LOG_TAG,__VA_ARGS__)
+#define  LOGI(...)  __android_log_print(ANDROID_LOG_INFO,LOG_TAG,__VA_ARGS__)
+#define  LOGW(...)  __android_log_print(ANDROID_LOG_WARN,LOG_TAG,__VA_ARGS__)
+#define  LOGE(...)  __android_log_print(ANDROID_LOG_ERROR,LOG_TAG,__VA_ARGS__)
+
+struct Engine
+{
+    android_app* app;
+    cv::Ptr<cv::VideoCapture> capture;
 };
 
-/**
- * Initialize an EGL context for the current display.
- */
-int init_display(struct engine* engine) {
-__android_log_print(ANDROID_LOG_VERBOSE, "RND1", " QQQ init_display \n");
-	// Setup OpenGL ES 2
-	// http://stackoverflow.com/questions/11478957/how-do-i-create-an-opengl-es-2-context-in-a-native-activity
+static cv::Size calc_optimal_camera_resolution(const char* supported, int width, int height)
+{
+    int frame_width = 0;
+    int frame_height = 0;
 
-	const EGLint attribs[] = {
-			EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, //important
-			EGL_BLUE_SIZE, 8,
-			EGL_GREEN_SIZE, 8,
-			EGL_RED_SIZE, 8,
-			EGL_NONE
-	};
+    size_t prev_idx = 0;
+    size_t idx = 0;
+    float min_diff = FLT_MAX;
 
-	EGLint attribList[] =
-	{
-			EGL_CONTEXT_CLIENT_VERSION, 2,
-			EGL_NONE
-	};
+    do
+    {
+        int tmp_width;
+        int tmp_height;
 
-	EGLint w, h, dummy, format;
-	EGLint numConfigs;
-	EGLConfig config;
-	EGLSurface surface;
-	EGLContext context;
+        prev_idx = idx;
+        while ((supported[idx] != '\0') && (supported[idx] != ','))
+            idx++;
 
-	EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        sscanf(&supported[prev_idx], "%dx%d", &tmp_width, &tmp_height);
 
-	eglInitialize(display, 0, 0);
+        int w_diff = width - tmp_width;
+        int h_diff = height - tmp_height;
+        if ((h_diff >= 0) && (w_diff >= 0))
+        {
+            if ((h_diff <= min_diff) && (tmp_height <= 720))
+            {
+                frame_width = tmp_width;
+                frame_height = tmp_height;
+                min_diff = h_diff;
+            }
+        }
 
-	/* Here, the application chooses the configuration it desires. In this
-	 * sample, we have a very simplified selection process, where we pick
-	 * the first EGLConfig that matches our criteria */
-	eglChooseConfig(display, attribs, &config, 1, &numConfigs);
+        idx++; // to skip comma symbol
 
-	/* EGL_NATIVE_VISUAL_ID is an attribute of the EGLConfig that is
-	 * guaranteed to be accepted by ANativeWindow_setBuffersGeometry().
-	 * As soon as we picked a EGLConfig, we can safely reconfigure the
-	 * ANativeWindow buffers to match, using EGL_NATIVE_VISUAL_ID. */
-	eglGetConfigAttrib(display, config, EGL_NATIVE_VISUAL_ID, &format);
+    } while(supported[idx-1] != '\0');
 
-	ANativeWindow_setBuffersGeometry(engine->app->window, 0, 0, format);
-
-	surface = eglCreateWindowSurface(display, config, engine->app->window, NULL);
-
-	context = eglCreateContext(display, config, NULL, attribList);
-
-	if (eglMakeCurrent(display, surface, surface, context) == EGL_FALSE) {
-		LOGW("Unable to eglMakeCurrent");
-		return -1;
-	}
-
-	// Grab the width and height of the surface
-	eglQuerySurface(display, surface, EGL_WIDTH, &w);
-	eglQuerySurface(display, surface, EGL_HEIGHT, &h);
-
-	engine->display = display;
-	engine->context = context;
-	engine->surface = surface;
-	engine->width = w;
-	engine->height = h;
-
-	// Initialize GL state.
-	glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_FASTEST);
-	glEnable(GL_CULL_FACE);
-	glDisable(GL_DEPTH_TEST);
-	glViewport(0, 0, w, h);
-
-	return 0;
+    return cv::Size(frame_width, frame_height);
 }
 
-/**
- * Just the current frame in the display.
- */
-void draw_frame(struct engine* engine) {
-__android_log_print(ANDROID_LOG_VERBOSE, "RND1", " QQQ draw_frame \n");
-	// No display.
-	if (engine->display == NULL) {
-		return;
-	}
+static void engine_draw_frame(Engine* engine, const cv::Mat& frame)
+{
+    if (engine->app->window == NULL)
+        return; // No window.
 
-	glClearColor(255,0,255, 1);
-	glClear(GL_COLOR_BUFFER_BIT);
-	eglSwapBuffers(engine->display, engine->surface);
+    ANativeWindow_Buffer buffer;
+    if (ANativeWindow_lock(engine->app->window, &buffer, NULL) < 0)
+    {
+        LOGW("Unable to lock window buffer");
+        return;
+    }
+
+    int32_t* pixels = (int32_t*)buffer.bits;
+
+    int left_indent = (buffer.width-frame.cols)/2;
+    int top_indent = (buffer.height-frame.rows)/2;
+
+    if (top_indent > 0)
+    {
+        memset(pixels, 0, top_indent*buffer.stride*sizeof(int32_t));
+        pixels += top_indent*buffer.stride;
+    }
+
+    for (int yy = 0; yy < frame.rows; yy++)
+    {
+        if (left_indent > 0)
+        {
+            memset(pixels, 0, left_indent*sizeof(int32_t));
+            memset(pixels+left_indent+frame.cols, 0, (buffer.stride-frame.cols-left_indent)*sizeof(int32_t));
+        }
+        int32_t* line = pixels + left_indent;
+        size_t line_size = frame.cols*4*sizeof(unsigned char);
+        memcpy(line, frame.ptr<unsigned char>(yy), line_size);
+        // go to next line
+        pixels += buffer.stride;
+    }
+    ANativeWindow_unlockAndPost(engine->app->window);
 }
 
-/**
- * Tear down the EGL context currently associated with the display.
- */
-void terminate_display(struct engine* engine) {
-	if (engine->display != EGL_NO_DISPLAY) {
-		eglMakeCurrent(engine->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-		if (engine->context != EGL_NO_CONTEXT) {
-			eglDestroyContext(engine->display, engine->context);
-		}
-		if (engine->surface != EGL_NO_SURFACE) {
-			eglDestroySurface(engine->display, engine->surface);
-		}
-		eglTerminate(engine->display);
-	}
-	engine->display = EGL_NO_DISPLAY;
-	engine->context = EGL_NO_CONTEXT;
-	engine->surface = EGL_NO_SURFACE;
+static void engine_handle_cmd(android_app* app, int32_t cmd)
+{
+    Engine* engine = (Engine*)app->userData;
+    switch (cmd)
+    {
+        case APP_CMD_INIT_WINDOW:
+            if (app->window != NULL)
+            {
+                LOGI("APP_CMD_INIT_WINDOW");
+
+                engine->capture = new cv::VideoCapture(0);
+
+                union {double prop; const char* name;} u;
+                u.prop = engine->capture->get(CV_CAP_PROP_SUPPORTED_PREVIEW_SIZES_STRING);
+
+                int view_width = ANativeWindow_getWidth(app->window);
+                int view_height = ANativeWindow_getHeight(app->window);
+
+                cv::Size camera_resolution;
+                if (u.name)
+                    camera_resolution = calc_optimal_camera_resolution(u.name, 640, 480);
+                else
+                {
+                    LOGE("Cannot get supported camera camera_resolutions");
+                    camera_resolution = cv::Size(ANativeWindow_getWidth(app->window),
+                                          ANativeWindow_getHeight(app->window));
+                }
+
+                if ((camera_resolution.width != 0) && (camera_resolution.height != 0))
+                {
+                    engine->capture->set(CV_CAP_PROP_FRAME_WIDTH, camera_resolution.width);
+                    engine->capture->set(CV_CAP_PROP_FRAME_HEIGHT, camera_resolution.height);
+                }
+
+                float scale = std::min((float)view_width/camera_resolution.width,
+                                       (float)view_height/camera_resolution.height);
+
+                if (ANativeWindow_setBuffersGeometry(app->window, (int)(view_width/scale),
+                    int(view_height/scale), WINDOW_FORMAT_RGBA_8888) < 0)
+                {
+                    LOGE("Cannot set pixel format!");
+                    return;
+                }
+
+                LOGI("Camera initialized at resolution %dx%d", camera_resolution.width, camera_resolution.height);
+            }
+            break;
+        case APP_CMD_TERM_WINDOW:
+            LOGI("APP_CMD_TERM_WINDOW");
+
+            engine->capture->release();
+            break;
+    }
 }
 
-/**
- * Process the next input event.
- */
-int32_t handle_input(struct android_app* app, AInputEvent* event) {
-__android_log_print(ANDROID_LOG_VERBOSE, "RND1", " QQQ handle_input \n");
-	struct engine* engine = (struct engine*)app->userData;
-	if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) {
-		engine->touchX = AMotionEvent_getX(event, 0);
-		engine->touchY = AMotionEvent_getY(event, 0);
-		LOGI("x %d\ty %d\n",engine->touchX,engine->touchY);
-		return 1;
-	}
-	return 0;
-}
+void android_main(android_app* app)
+{
+    Engine engine;
 
-/**
- * Process the next main command.
- */
-void handle_cmd(struct android_app* app, int32_t cmd) {
-__android_log_print(ANDROID_LOG_VERBOSE, "RND1", " QQQ handle_cmd \n");
-	struct engine* engine = (struct engine*)app->userData;
-	switch (cmd) {
-	case APP_CMD_SAVE_STATE:
-		break;
-	case APP_CMD_INIT_WINDOW:
-		// The window is being shown, get it ready.
-		if (engine->app->window != NULL) {
-			init_display(engine);
-			draw_frame(engine);
-		}
-		break;
-	case APP_CMD_TERM_WINDOW:
-		// The window is being hidden or closed, clean it up.
-		terminate_display(engine);
-		break;
-	case APP_CMD_LOST_FOCUS:
-		draw_frame(engine);
-		break;
-	}
-}
+    // Make sure glue isn't stripped.
+    app_dummy();
 
-/**
- * Main entry point, handles events
- */
-void android_main(struct android_app* state) {
-	app_dummy();
+    size_t engine_size = sizeof(engine); // for Eclipse CDT parser
+    memset((void*)&engine, 0, engine_size);
+    app->userData = &engine;
+    app->onAppCmd = engine_handle_cmd;
+    engine.app = app;
 
-	struct engine engine;
+    float fps = 0;
+    cv::Mat drawing_frame;
+    std::queue<int64> time_queue;
 
-	memset(&engine, 0, sizeof(engine));
-	state->userData = &engine;
-	state->onAppCmd = handle_cmd;
-	state->onInputEvent = handle_input;
-	engine.app = state;
+    // loop waiting for stuff to do.
+    while (1)
+    {
+        // Read all pending events.
+        int ident;
+        int events;
+        android_poll_source* source;
 
-	// Read all pending events.
-	while (1) {
-		int ident;
-		int events;
-		struct android_poll_source* source;
+        // Process system events
+        while ((ident=ALooper_pollAll(0, NULL, &events, (void**)&source)) >= 0)
+        {
+            // Process this event.
+            if (source != NULL)
+            {
+                source->process(app, source);
+            }
 
-		while ((ident=ALooper_pollAll(0, NULL, &events,(void**)&source)) >= 0) {
+            // Check if we are exiting.
+            if (app->destroyRequested != 0)
+            {
+                LOGI("Engine thread destroy requested!");
+                return;
+            }
+        }
 
-			// Process this event.
-			if (source != NULL) {
-				source->process(state, source);
-			}
+        int64 then;
+        int64 now = cv::getTickCount();
+        time_queue.push(now);
 
-			// Check if we are exiting.
-			if (state->destroyRequested != 0) {
-				terminate_display(&engine);
-				return;
-			}
-		}
+        // Capture frame from camera and draw it
+        if (!engine.capture.empty())
+        {
+            if (engine.capture->grab())
+                engine.capture->retrieve(drawing_frame, CV_CAP_ANDROID_COLOR_FRAME_RGBA);
 
-		// Draw the current frame
-		draw_frame(&engine);
-	}
+             char buffer[256];
+             sprintf(buffer, "Display performance: %dx%d @ %.3f", drawing_frame.cols, drawing_frame.rows, fps);
+             cv::putText(drawing_frame, std::string(buffer), cv::Point(8,64),
+                         cv::FONT_HERSHEY_COMPLEX_SMALL, 1, cv::Scalar(0,255,0,255));
+             engine_draw_frame(&engine, drawing_frame);
+        }
+
+        if (time_queue.size() >= 2)
+            then = time_queue.front();
+        else
+            then = 0;
+
+        if (time_queue.size() >= 25)
+            time_queue.pop();
+
+        fps = time_queue.size() * (float)cv::getTickFrequency() / (now-then);
+    }
 }
